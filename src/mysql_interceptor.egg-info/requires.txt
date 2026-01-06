@@ -1,0 +1,12 @@
+
+[confluent]
+confluent-kafka>=2.2
+
+[kafka-python]
+kafka-python>=2.0
+
+[pymysql]
+PyMySQL>=1.1
+
+[sqlalchemy]
+SQLAlchemy>=1.4

@@ -10,10 +10,13 @@ from .config.settings import Settings
 from .dbapi.classify import is_call, is_ddl, is_use, is_write
 from .events.models import SqlLogMessage
 from .kafka.publisher import Publisher
-from .utils import hostname
+from .utils import extract_server_info_best_effort, hostname
 
 IVER8 = 1
 
+PY_ERROR_CONNECTION_ID = 1 << 21
+PY_ERROR_PREPROCESS_BATCHED_ARGS = 1 << 22
+PY_ERROR_POSTPROCESS_BATCHED_ARGS = 1 << 23
 PY_ERROR_DEFAULT_TZ = 1 << 24
 PY_ERROR_SERVER_TZ = 1 << 25
 PY_ERROR_ISOLATION = 1 << 26
@@ -21,10 +24,7 @@ PY_ERROR_CLIENT_FLAGS = 1 << 27
 PY_ERROR_SERVER_FLAGS = 1 << 28
 PY_ERROR_SERVER_VERSION = 1 << 29
 PY_ERROR_SERVER_HOST = 1 << 30
-PY_ERROR_CONNECTION_ID = 1 << 21
-
-PY_ERROR_PREPROCESS_BATCHED_ARGS = 1 << 22
-PY_ERROR_POSTPROCESS_BATCHED_ARGS = 1 << 23
+PY_ERROR_SERVER_INFO = 1 << 31
 
 
 def _safe_str(v: Any) -> Optional[str]:
@@ -75,7 +75,6 @@ class _SAState:
 
     server_host: Optional[str]
     server_version: Optional[str]
-    server_info: Optional[str]
     connection_id: Optional[int]
 
     default_tz: Optional[str]
@@ -135,13 +134,6 @@ def _build_state(*, dbapi_conn: Any, engine_url: Any, publisher: Publisher, sett
     except Exception:
         iflags |= PY_ERROR_SERVER_VERSION
 
-    server_info = None
-    try:
-        if hasattr(dbapi_conn, "get_host_info"):
-            server_info = _safe_str(dbapi_conn.get_host_info())
-    except Exception:
-        server_info = None
-
     connection_id = None
     try:
         connection_id = _safe_int(_try_query_scalar(dbapi_conn, "SELECT CONNECTION_ID()"))
@@ -179,7 +171,6 @@ def _build_state(*, dbapi_conn: Any, engine_url: Any, publisher: Publisher, sett
         client=client,
         server_host=server_host,
         server_version=server_version,
-        server_info=server_info,
         connection_id=connection_id,
         default_tz=default_tz,
         server_tz=server_tz,
@@ -193,13 +184,13 @@ def instrument_engine(*, engine: Any, publisher: Publisher, settings: Settings) 
     from sqlalchemy import event  # type: ignore
 
     @event.listens_for(engine, "connect")
-    def _on_connect(dbapi_conn: Any, connection_record: Any) -> None:  # noqa: ANN401
+    def _on_connect(dbapi_conn: Any, connection_record: Any) -> None:
         connection_record.info["mysql_interceptor_state"] = _build_state(
             dbapi_conn=dbapi_conn, engine_url=engine.url, publisher=publisher, settings=settings
         )
 
     @event.listens_for(engine, "commit")
-    def _on_commit(sa_conn: Any) -> None:  # noqa: ANN401
+    def _on_commit(sa_conn: Any) -> None:
         st: Optional[_SAState] = getattr(sa_conn, "info", {}).get("mysql_interceptor_state")  # type: ignore[attr-defined]
         if not st or not st.settings.buffer_until_commit or not st.buffer:
             return
@@ -212,17 +203,17 @@ def instrument_engine(*, engine: Any, publisher: Publisher, settings: Settings) 
                 _publish_best_effort(st, e)
 
     @event.listens_for(engine, "rollback")
-    def _on_rollback(sa_conn: Any) -> None:  # noqa: ANN401
+    def _on_rollback(sa_conn: Any) -> None:
         st: Optional[_SAState] = getattr(sa_conn, "info", {}).get("mysql_interceptor_state")  # type: ignore[attr-defined]
         if st and st.settings.buffer_until_commit:
             st.buffer.clear()
 
     @event.listens_for(engine, "before_cursor_execute")
-    def _before_cursor_execute(sa_conn: Any, cursor: Any, statement: str, parameters: Any, context: Any, executemany: bool) -> None:  # noqa: ANN401,E501
+    def _before_cursor_execute(sa_conn: Any, cursor: Any, statement: str, parameters: Any, context: Any, executemany: bool) -> None:
         context._mi_t0 = time.perf_counter_ns()
 
     @event.listens_for(engine, "after_cursor_execute")
-    def _after_cursor_execute(sa_conn: Any, cursor: Any, statement: str, parameters: Any, context: Any, executemany: bool) -> None:  # noqa: ANN401,E501
+    def _after_cursor_execute(sa_conn: Any, cursor: Any, statement: str, parameters: Any, context: Any, executemany: bool) -> None:
         t0 = getattr(context, "_mi_t0", None)
         if t0 is None:
             return
@@ -230,6 +221,15 @@ def instrument_engine(*, engine: Any, publisher: Publisher, settings: Settings) 
         duration_ns = time.perf_counter_ns() - t0
         end_ms = time.time_ns() // 1_000_000
         timestamp_ms = end_ms - (duration_ns // 1_000_000)
+
+        dbapi_conn = None
+        try:
+            dbapi_conn = sa_conn.connection.connection  # type: ignore[attr-defined]
+        except Exception:
+            dbapi_conn = None
+
+        server_info, had_err = extract_server_info_best_effort(cursor, dbapi_conn)
+        iflags_extra = PY_ERROR_SERVER_INFO if had_err else 0
 
         st: Optional[_SAState] = getattr(sa_conn, "info", {}).get("mysql_interceptor_state")  # type: ignore[attr-defined]
         if not st:
@@ -249,7 +249,7 @@ def instrument_engine(*, engine: Any, publisher: Publisher, settings: Settings) 
 
         server_flags, _ = _compute_server_flags(sa_conn)
         st.cached_server_flags = server_flags
-        iflags = st.base_iflags
+        iflags = st.base_iflags | iflags_extra
 
         if not executemany:
             st.execution_count += 1
@@ -260,13 +260,13 @@ def instrument_engine(*, engine: Any, publisher: Publisher, settings: Settings) 
                 update_count=_safe_int(getattr(cursor, "rowcount", None)),
                 sql=statement,
                 query_params=_params_or_none(st, parameters),
+                server_info=server_info,
                 iflags=iflags,
                 error=None,
             )
             _buffer_or_publish(st, msg)
             return
 
-        # executemany: one record per param set; only last gets duration/updateCount
         try:
             param_sets = list(parameters) if not isinstance(parameters, list) else parameters
         except Exception:
@@ -294,46 +294,11 @@ def instrument_engine(*, engine: Any, publisher: Publisher, settings: Settings) 
                 update_count=(total_update if is_last else None),
                 sql=statement,
                 query_params=qps,
+                server_info=(server_info if is_last else None),
                 iflags=iflags,
                 error=None,
             )
             _buffer_or_publish(st, msg)
-
-    @event.listens_for(engine, "handle_error")
-    def _handle_error(ctx: Any) -> None:  # noqa: ANN401
-        try:
-            sa_conn = ctx.connection
-            st: Optional[_SAState] = getattr(sa_conn, "info", {}).get("mysql_interceptor_state")  # type: ignore[attr-defined]
-            if not st:
-                return
-
-            statement = getattr(ctx, "statement", None) or ""
-            parameters = getattr(ctx, "parameters", None)
-            cursor = getattr(ctx, "cursor", None)
-            exc = getattr(ctx, "original_exception", None)
-
-            exec_ctx = getattr(ctx, "execution_context", None)
-            t0 = getattr(exec_ctx, "_mi_t0", None) if exec_ctx is not None else None
-            duration_ns = (time.perf_counter_ns() - t0) if t0 is not None else None
-            end_ms = time.time_ns() // 1_000_000
-            timestamp_ms = end_ms - ((duration_ns or 0) // 1_000_000)
-
-            _track_stmt_db_name(st, statement)
-
-            st.execution_count += 1
-            msg = _build_message(
-                st=st,
-                timestamp_ms=timestamp_ms,
-                duration_ns=duration_ns,
-                update_count=_safe_int(getattr(cursor, "rowcount", None)) if cursor is not None else None,
-                sql=statement,
-                query_params=_params_or_none(st, parameters),
-                iflags=st.base_iflags,
-                error=exc,
-            )
-            _publish_best_effort(st, msg)
-        except Exception:
-            return
 
 
 def _compute_server_flags(sa_conn: Any) -> Tuple[Optional[int], int]:
@@ -369,6 +334,8 @@ def _parse_use_db(sql: str) -> Optional[str]:
 
 
 def _should_capture(st: _SAState, sql: str, *, force_call: bool) -> bool:
+    if st.settings.capture_all:
+        return True
     if is_use(sql):
         return True
     return (
@@ -396,6 +363,7 @@ def _build_message(
     update_count: Optional[int],
     sql: str,
     query_params: Optional[List[str]],
+    server_info: Optional[str],
     iflags: int,
     error: Optional[BaseException],
 ) -> SqlLogMessage:
@@ -422,15 +390,8 @@ def _build_message(
         sql=(sql if st.settings.include_sql else None),
         queryParams=query_params,
         errorMessage=_safe_str(error),
-        serverInfo=st.server_info,
+        serverInfo=server_info,
     )
-
-
-def _safe_str(v: Any) -> Optional[str]:
-    try:
-        return None if v is None else str(v)
-    except Exception:
-        return None
 
 
 def _publish_best_effort(st: _SAState, msg: SqlLogMessage) -> None:

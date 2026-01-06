@@ -88,9 +88,9 @@ class Settings:
 
     # Capture policy
     buffer_until_commit: bool = True
-    capture_all: bool = True  # log SELECTs and everything else
-    capture_ddl: bool = False  # used only when capture_all=false
-    capture_callproc: bool = True  # used only when capture_all=false
+    capture_all: bool = True  # if false, logs USE and writes (+ optional ddl/callproc)
+    capture_ddl: bool = False
+    capture_callproc: bool = True
 
     # Payload toggles
     include_sql: bool = True
@@ -106,15 +106,14 @@ class Settings:
     publish_queue_maxsize: int = 10_000
     publish_batch_size: int = 500
     publish_flush_interval_s: float = 0.5
-    backpressure: str = "block"  # "block" or "drop"
+    backpressure: str = "block"  # "block" | "drop"
 
-    # Inline debug / statement logging knobs (Java naming)
+    # Java-compatible debug knobs
     statement_logging_allowed: bool = True  # DEBUGQUERYINTERCEPTOR_STATEMENTLOGGING
     inline_debug: bool = False  # DEBUGQUERYINTERCEPTOR_INLINEDEBUG
     inline_debug_value: Optional[str] = None  # DEBUGQUERYINTERCEPTOR_DEBUG
 
     service_name: str = "unknown-service"
-
 
     @classmethod
     def from_env(cls) -> "Settings":

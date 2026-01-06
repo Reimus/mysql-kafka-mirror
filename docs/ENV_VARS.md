@@ -1,7 +1,5 @@
 # Environment variables
 
-This file is generated from `Settings` + `ENV_SPECS`.
-
 | Env var | Field | Type | Default |
 |---|---|---|---|
 | `INTERCEPTOR_KAFKA_BOOTSTRAP_SERVERS` | `kafka_bootstrap_servers` | `opt_str` | `` |

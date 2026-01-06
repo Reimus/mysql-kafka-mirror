@@ -10,11 +10,14 @@ from ..dbapi.classify import is_call, is_ddl, is_use, is_write
 from ..dbapi.txn_buffer import TransactionBuffer
 from ..events.models import SqlLogMessage
 from ..kafka.publisher import Publisher
-from ..utils import hostname
+from ..utils import extract_server_info_best_effort, hostname
 
 IVER8 = 1
 
 # Python-only iFlag bits (avoid collision with Java bits)
+PY_ERROR_CONNECTION_ID = 1 << 21
+PY_ERROR_PREPROCESS_BATCHED_ARGS = 1 << 22
+PY_ERROR_POSTPROCESS_BATCHED_ARGS = 1 << 23
 PY_ERROR_DEFAULT_TZ = 1 << 24
 PY_ERROR_SERVER_TZ = 1 << 25
 PY_ERROR_ISOLATION = 1 << 26
@@ -22,11 +25,7 @@ PY_ERROR_CLIENT_FLAGS = 1 << 27
 PY_ERROR_SERVER_FLAGS = 1 << 28
 PY_ERROR_SERVER_VERSION = 1 << 29
 PY_ERROR_SERVER_HOST = 1 << 30
-PY_ERROR_PUBLISH = 1 << 31
-
-PY_ERROR_PREPROCESS_BATCHED_ARGS = 1 << 22
-PY_ERROR_POSTPROCESS_BATCHED_ARGS = 1 << 23
-PY_ERROR_CONNECTION_ID = 1 << 21
+PY_ERROR_SERVER_INFO = 1 << 31
 
 
 @runtime_checkable
@@ -127,13 +126,19 @@ class CursorWrapper:
             duration_ns = time.perf_counter_ns() - t0
             end_ms = time.time_ns() // 1_000_000
             timestamp_ms = end_ms - (duration_ns // 1_000_000)
+
+            server_info, had_err = extract_server_info_best_effort(self._cursor, self._parent._conn)
+            extra_iflags = PY_ERROR_SERVER_INFO if had_err else 0
+
             self._parent._after_statement(
                 sql=operation,
                 params=params,
                 timestamp_ms=timestamp_ms,
                 duration_ns=duration_ns,
                 update_count=_safe_int(getattr(self._cursor, "rowcount", None)),
+                server_info=server_info,
                 error=err,
+                extra_iflags=extra_iflags,
             )
 
     def executemany(self, operation: str, seq_of_params: Any) -> Any:
@@ -150,14 +155,19 @@ class CursorWrapper:
             duration_ns = time.perf_counter_ns() - t0
             end_ms = time.time_ns() // 1_000_000
             timestamp_ms = end_ms - (duration_ns // 1_000_000)
+
+            server_info, had_err = extract_server_info_best_effort(self._cursor, self._parent._conn)
+            extra_iflags = (PY_ERROR_SERVER_INFO if had_err else 0) | recorder.iflags
+
             self._parent._after_executemany(
                 sql=operation,
                 recorded_query_params=recorder.recorded,
                 timestamp_ms=timestamp_ms,
                 duration_ns=duration_ns,
                 total_update_count=_safe_int(getattr(self._cursor, "rowcount", None)),
+                server_info=server_info,
                 error=err,
-                extra_iflags=recorder.iflags,
+                extra_iflags=extra_iflags,
             )
 
     def callproc(self, procname: str, params: Any = None) -> Any:
@@ -173,14 +183,20 @@ class CursorWrapper:
             duration_ns = time.perf_counter_ns() - t0
             end_ms = time.time_ns() // 1_000_000
             timestamp_ms = end_ms - (duration_ns // 1_000_000)
+
+            server_info, had_err = extract_server_info_best_effort(self._cursor, self._parent._conn)
+            extra_iflags = PY_ERROR_SERVER_INFO if had_err else 0
+
             self._parent._after_statement(
                 sql=sql,
                 params=params,
                 timestamp_ms=timestamp_ms,
                 duration_ns=duration_ns,
                 update_count=_safe_int(getattr(self._cursor, "rowcount", None)),
+                server_info=server_info,
                 error=err,
                 force_call=True,
+                extra_iflags=extra_iflags,
             )
 
     def close(self) -> Any:
@@ -213,8 +229,6 @@ class ConnectionWrapper:
 
         self._server_host, self._server_host_iflags = self._compute_server_host()
         self._server_version, self._server_version_iflags = self._compute_server_version()
-        self._server_info = self._compute_server_info()
-
         self._connection_id, self._connid_iflags = self._compute_connection_id()
 
         self._default_tz, self._default_tz_iflags = _default_tz()
@@ -274,6 +288,8 @@ class ConnectionWrapper:
         return iflags
 
     def _should_capture(self, sql: str, *, force_call: bool = False) -> bool:
+        if self._settings.capture_all:
+            return True
         if is_use(sql):
             return True
         return (
@@ -298,8 +314,10 @@ class ConnectionWrapper:
         timestamp_ms: int,
         duration_ns: int,
         update_count: Optional[int],
+        server_info: Optional[str],
         error: Optional[BaseException],
         force_call: bool = False,
+        extra_iflags: int = 0,
     ) -> None:
         self._execution_count += 1
 
@@ -307,7 +325,7 @@ class ConnectionWrapper:
         if not self._should_capture(sql, force_call=force_call):
             return
 
-        iflags = self._base_iflags()
+        iflags = self._base_iflags() | extra_iflags
 
         query_params: Optional[List[str]] = None
         try:
@@ -327,18 +345,18 @@ class ConnectionWrapper:
             connectionId=self._connection_id,
             totalPoolCount=None,
             executionCount=self._execution_count,
+            durationNs=duration_ns,
             serverFlags=self._cached_server_flags,
             clientFlags=self._client_flags,
             iFlags=iflags,
             defaultTZ=self._default_tz,
             serverTZ=self._server_tz,
             isolationLvl=self._isolation_lvl,
-            durationNs=duration_ns,
             updateCount=update_count,
             sql=(sql if self._settings.include_sql else None),
             queryParams=(query_params if self._settings.include_params else None),
             errorMessage=_safe_str(error),
-            serverInfo=self._server_info,
+            serverInfo=server_info,
         )
 
         if error is not None:
@@ -358,6 +376,7 @@ class ConnectionWrapper:
         timestamp_ms: int,
         duration_ns: int,
         total_update_count: Optional[int],
+        server_info: Optional[str],
         error: Optional[BaseException],
         extra_iflags: int = 0,
     ) -> None:
@@ -386,18 +405,18 @@ class ConnectionWrapper:
                 connectionId=self._connection_id,
                 totalPoolCount=None,
                 executionCount=self._execution_count,
+                durationNs=(duration_ns if is_last else None),
                 serverFlags=self._cached_server_flags,
                 clientFlags=self._client_flags,
                 iFlags=base_iflags,
                 defaultTZ=self._default_tz,
                 serverTZ=self._server_tz,
                 isolationLvl=self._isolation_lvl,
-                durationNs=(duration_ns if is_last else None),
                 updateCount=(total_update_count if is_last else None),
                 sql=(sql if self._settings.include_sql else None),
                 queryParams=(recorded_query_params[i] if self._settings.include_params else None),
                 errorMessage=_safe_str(error),
-                serverInfo=self._server_info,
+                serverInfo=(server_info if is_last else None),
             )
 
             if error is not None:
@@ -426,8 +445,6 @@ class ConnectionWrapper:
     def _drop_on_rollback(self) -> None:
         self._buffer.clear()
 
-    # --- metadata best-effort ---
-
     def _compute_server_host(self) -> tuple[Optional[str], int]:
         try:
             host = getattr(self._conn, "host", None) or getattr(self._conn, "_host", None)
@@ -447,7 +464,7 @@ class ConnectionWrapper:
             cur = self._conn.cursor()
             try:
                 cur.execute("SELECT VERSION()")
-                row = getattr(cur, "fetchone")()
+                row = cur.fetchone()  # type: ignore[attr-defined]
                 if isinstance(row, (list, tuple)) and row:
                     return _safe_str(row[0]), 0
                 return _safe_str(row), 0
@@ -459,20 +476,12 @@ class ConnectionWrapper:
         except Exception:
             return None, PY_ERROR_SERVER_VERSION
 
-    def _compute_server_info(self) -> Optional[str]:
-        try:
-            if hasattr(self._conn, "get_host_info"):
-                return _safe_str(self._conn.get_host_info())  # type: ignore[attr-defined]
-            return None
-        except Exception:
-            return None
-
     def _compute_connection_id(self) -> tuple[Optional[int], int]:
         try:
             cur = self._conn.cursor()
             try:
                 cur.execute("SELECT CONNECTION_ID()")
-                row = getattr(cur, "fetchone")()
+                row = cur.fetchone()  # type: ignore[attr-defined]
                 if row is None:
                     return None, 0
                 if isinstance(row, (list, tuple)):
@@ -491,7 +500,7 @@ class ConnectionWrapper:
             cur = self._conn.cursor()
             try:
                 cur.execute("SELECT @@session.time_zone")
-                row = getattr(cur, "fetchone")()
+                row = cur.fetchone()  # type: ignore[attr-defined]
                 if isinstance(row, (list, tuple)) and row:
                     return _safe_str(row[0]), 0
                 return _safe_str(row), 0
@@ -508,7 +517,7 @@ class ConnectionWrapper:
             cur = self._conn.cursor()
             try:
                 cur.execute("SELECT @@transaction_isolation")
-                row = getattr(cur, "fetchone")()
+                row = cur.fetchone()  # type: ignore[attr-defined]
                 iso = _safe_str(row[0]) if isinstance(row, (list, tuple)) and row else _safe_str(row)
                 return _isolation_to_level(iso), 0
             finally:

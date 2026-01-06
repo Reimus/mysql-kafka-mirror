@@ -1,3 +1,20 @@
+Metadata-Version: 2.4
+Name: mysql-interceptor
+Version: 0.1.0
+Summary: Intercept MySQL writes and mirror to Kafka with Java-compatible schema.
+Author: Your Team
+License: MIT
+Requires-Python: >=3.9
+Description-Content-Type: text/markdown
+Provides-Extra: pymysql
+Requires-Dist: PyMySQL>=1.1; extra == "pymysql"
+Provides-Extra: sqlalchemy
+Requires-Dist: SQLAlchemy>=1.4; extra == "sqlalchemy"
+Provides-Extra: confluent
+Requires-Dist: confluent-kafka>=2.2; extra == "confluent"
+Provides-Extra: kafka-python
+Requires-Dist: kafka-python>=2.0; extra == "kafka-python"
+
 # mysql-interceptor
 
 Drop-in interception for MySQL writes that mirrors events to Kafka using a Java-compatible JSON schema.

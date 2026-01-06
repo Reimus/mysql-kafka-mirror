@@ -1,23 +1,33 @@
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
-from ..dbapi.wrappers import DBAPIConnection
-from ..errors import DriverAdapterError
+_CONNECT_FUNC: Optional[Callable[..., Any]] = None
+
+
+def set_connect_func(func: Optional[Callable[..., Any]]) -> None:
+    """Inject the real (unpatched) driver connect function."""
+    global _CONNECT_FUNC
+    _CONNECT_FUNC = func
 
 
 class PyMySQLAdapter:
-    name = "pymysql"
+    def connect(self, *args: Any, **kwargs: Any) -> Any:
+        import pymysql  # type: ignore
 
-    def connect(self, *args: Any, **kwargs: Any) -> DBAPIConnection:
-        try:
-            import pymysql  # type: ignore
-        except Exception as e:
-            raise DriverAdapterError("PyMySQL is not installed. Install mysql-interceptor[pymysql].") from e
-        return pymysql.connect(*args, **kwargs)
+        fn = _CONNECT_FUNC or pymysql.connect
+        return fn(*args, **kwargs)
 
-    def database_name(self, conn: DBAPIConnection, connect_kwargs: dict[str, Any]) -> Optional[str]:
-        for k in ("database", "db"):
-            if k in connect_kwargs:
-                return str(connect_kwargs[k])
-        return getattr(conn, "db", None) or None
+    def database_name(self, conn: Any, connect_kwargs: dict[str, Any]) -> Optional[str]:
+        for k in ("db", "database"):
+            v = connect_kwargs.get(k)
+            if v:
+                return str(v)
+        for attr in ("db", "database", "_db", "_database"):
+            v = getattr(conn, attr, None)
+            if v:
+                try:
+                    return str(v)
+                except Exception:
+                    return None
+        return None
