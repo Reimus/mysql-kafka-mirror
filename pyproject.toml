@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mysql-interceptor"
+version = "0.1.0"
+description = "Intercept MySQL writes and mirror to Kafka with Java-compatible schema."
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+authors = [{name="Your Team"}]
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0"]
+pymysql = ["PyMySQL>=1.1"]
+sqlalchemy = ["SQLAlchemy>=1.4"]
+confluent = ["confluent-kafka>=2.2"]
+kafka-python = ["kafka-python>=2.0"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
