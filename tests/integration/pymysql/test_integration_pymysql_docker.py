@@ -83,6 +83,7 @@ def test_pymysql_end_to_end_mysql_kafka_docker() -> None:
         # Second connection with database set at connect-time (dbName should be populated)
         conn2 = pymysql.connect(host="127.0.0.1", user="root", password="root", port=3306, db=db, autocommit=True)
         cur2 = conn2.cursor()
+        cur2.execute("SELECT 9001")
         cur2.execute("CREATE TABLE t2 (id INT PRIMARY KEY AUTO_INCREMENT, v INT)")
         # Cross-db session switch: dbName should remain `db`, stmtDbName should become `db2`
         cur2.execute(f"USE {db2}")
@@ -98,6 +99,11 @@ def test_pymysql_end_to_end_mysql_kafka_docker() -> None:
         cur2.execute("DROP TABLE t2")
         cur2.close()
         conn2.close()
+
+        # totalPoolCount should decrement after closing conn2 (conn1 still alive)
+        cur.execute(f"USE {db}")
+        cur.execute("SELECT 4242")
+
         cur.execute(f"DROP DATABASE {db2}")
         cur.execute(f"DROP DATABASE {db}")
 
@@ -140,3 +146,15 @@ def test_pymysql_end_to_end_mysql_kafka_docker() -> None:
     err_sqls = [m for m in msgs if m.get("errorMessage") and isinstance(m.get("sql"), str)]
     assert any("selec 1" in m["sql"].lower() for m in err_sqls)
     assert any("does_not_exist" in m["sql"].lower() for m in err_sqls)
+
+
+    pool_counts = [m.get("totalPoolCount") for m in msgs if isinstance(m.get("totalPoolCount"), int)]
+    assert pool_counts, "expected integer totalPoolCount in at least one message"
+    assert min(pool_counts) >= 1
+
+    hi = [m for m in msgs if isinstance(m.get("sql"), str) and m["sql"].lower().strip().startswith("select 9001")]
+    assert any(isinstance(m.get("totalPoolCount"), int) and m["totalPoolCount"] >= 2 for m in hi)
+
+    lo = [m for m in msgs if isinstance(m.get("sql"), str) and m["sql"].lower().strip().startswith("select 4242")]
+    assert any(m.get("totalPoolCount") == 1 for m in lo)
+

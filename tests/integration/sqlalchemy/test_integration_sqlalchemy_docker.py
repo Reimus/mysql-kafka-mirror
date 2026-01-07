@@ -85,6 +85,7 @@ def test_sqlalchemy_end_to_end_mysql_kafka_docker() -> None:
         engine2 = create_engine(f"mysql+pymysql://root:root@127.0.0.1:3306/{db}")
         with engine2.begin() as conn2:
             conn2.execute(text("CREATE TABLE t2 (id INT PRIMARY KEY AUTO_INCREMENT, v INT)"))
+            conn2.execute(text("SELECT 9001"))
             # Cross-db session switch: dbName should remain `db`, stmtDbName should become `db2`
             conn2.execute(text(f"USE {db2}"))
             conn2.execute(text("CREATE TABLE t_cross (id INT PRIMARY KEY AUTO_INCREMENT, v INT)"))
@@ -118,6 +119,13 @@ def test_sqlalchemy_end_to_end_mysql_kafka_docker() -> None:
             sess.commit()
 
         Base.metadata.drop_all(engine2)
+        engine2.dispose()
+
+        # totalPoolCount should decrement after disposing engine2 (engine1 still alive)
+        with engine.begin() as conn:
+            conn.execute(text(f"USE {db}"))
+            conn.execute(text("SELECT 4242"))
+
 
         # Drop databases (ensure these statements are also intercepted)
         with engine.begin() as conn:
@@ -160,3 +168,13 @@ def test_sqlalchemy_end_to_end_mysql_kafka_docker() -> None:
     err_sqls = [m for m in msgs if m.get("errorMessage") and isinstance(m.get("sql"), str)]
     assert any("selec 1" in m["sql"].lower() for m in err_sqls)
     assert any("does_not_exist" in m["sql"].lower() for m in err_sqls)
+
+    pool_counts = [m.get("totalPoolCount") for m in msgs if isinstance(m.get("totalPoolCount"), int)]
+    assert pool_counts, "expected integer totalPoolCount in at least one message"
+    assert min(pool_counts) >= 1
+
+    hi = [m for m in msgs if isinstance(m.get("sql"), str) and m["sql"].lower().strip().startswith("select 9001")]
+    assert any(isinstance(m.get("totalPoolCount"), int) and m["totalPoolCount"] >= 2 for m in hi)
+
+    lo = [m for m in msgs if isinstance(m.get("sql"), str) and m["sql"].lower().strip().startswith("select 4242")]
+    assert any(m.get("totalPoolCount") == 1 for m in lo)
