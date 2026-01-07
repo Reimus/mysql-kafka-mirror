@@ -14,7 +14,7 @@ from .utils import extract_server_info_best_effort, hostname
 from .pool_counter import GLOBAL_POOL_COUNTER
 
 IVER8 = 1
-PY_DRIVER = 2
+PY_DRIVER = 4
 
 PY_ERROR_CONNECTION_ID = 1 << 21
 PY_ERROR_PREPROCESS_BATCHED_ARGS = 1 << 22
