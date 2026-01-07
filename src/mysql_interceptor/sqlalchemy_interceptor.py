@@ -205,6 +205,16 @@ def _build_state(*, dbapi_conn: Any, engine_url: Any, publisher: Publisher, sett
 def instrument_engine(*, engine: Any, publisher: Publisher, settings: Settings) -> None:
     from sqlalchemy import event  # type: ignore
 
+    # Idempotency: avoid registering duplicate listeners if patch_sqlalchemy()
+    # is called multiple times, or if create_engine is wrapped more than once.
+    if getattr(engine, "_mysql_interceptor_instrumented", False):
+        return
+    try:
+        setattr(engine, "_mysql_interceptor_instrumented", True)
+    except Exception:
+        # Best effort. If we can't set the attribute, we still proceed.
+        pass
+
     @event.listens_for(engine, "connect")
     def _on_connect(dbapi_conn: Any, connection_record: Any) -> None:
         if not connection_record.info.get("_mi_pool_counted"):
@@ -217,7 +227,6 @@ def instrument_engine(*, engine: Any, publisher: Publisher, settings: Settings) 
             dbapi_conn=dbapi_conn, engine_url=engine.url, publisher=publisher, settings=settings
         )
 
-
     @event.listens_for(engine, "close")
     def _on_close(dbapi_conn: Any, connection_record: Any) -> None:
         if connection_record.info.pop("_mi_pool_counted", False):
@@ -225,6 +234,7 @@ def instrument_engine(*, engine: Any, publisher: Publisher, settings: Settings) 
                 GLOBAL_POOL_COUNTER.dec()
             except Exception:
                 pass
+
     @event.listens_for(engine, "commit")
     def _on_commit(sa_conn: Any) -> None:
         st: Optional[_SAState] = getattr(sa_conn, "info", {}).get("mysql_interceptor_state")  # type: ignore[attr-defined]
@@ -332,67 +342,11 @@ def instrument_engine(*, engine: Any, publisher: Publisher, settings: Settings) 
             )
             _buffer_or_publish(st, msg)
 
-
-
     @event.listens_for(engine, "handle_error")
     def _on_handle_error(exception_context: Any) -> None:
         """Capture DBAPI errors (after_cursor_execute does not run on exceptions)."""
-        try:
-            sa_conn = getattr(exception_context, "connection", None)
-            st: Optional[_SAState] = getattr(sa_conn, "info", {}).get("mysql_interceptor_state") if sa_conn else None  # type: ignore[attr-defined]
-            if not st:
-                return
+        handle_error(exception_context)
 
-            statement = getattr(exception_context, "statement", None)
-            if statement is None:
-                return
-            sql = str(statement)
-
-            _track_stmt_db_name(st, sql)
-
-            if not _should_capture(st, sql, force_call=False):
-                st.execution_count += 1
-                return
-
-            exec_ctx = getattr(exception_context, "execution_context", None)
-            t0 = getattr(exec_ctx, "_mi_t0", None)
-            duration_ns: Optional[int] = (time.perf_counter_ns() - t0) if isinstance(t0, int) else None
-
-            end_ms = time.time_ns() // 1_000_000
-            timestamp_ms = end_ms - (duration_ns // 1_000_000) if duration_ns is not None else end_ms
-
-            cursor = getattr(exception_context, "cursor", None)
-            dbapi_conn = _get_dbapi_conn_from_sa_connection(sa_conn) if sa_conn is not None else None
-            server_info, had_err = extract_server_info_best_effort(cursor, dbapi_conn)
-            iflags_extra = PY_ERROR_SERVER_INFO if had_err else 0
-
-            server_flags, _ = _compute_server_flags(sa_conn)
-            st.cached_server_flags = server_flags
-            iflags = st.base_iflags | iflags_extra
-
-            query_params = _params_or_none(st, getattr(exception_context, "parameters", None))
-
-            original = getattr(exception_context, "original_exception", None)
-            if original is None:
-                original = getattr(exception_context, "original", None)
-
-            st.execution_count += 1
-            msg = _build_message(
-                st=st,
-                timestamp_ms=timestamp_ms,
-                duration_ns=duration_ns,
-                update_count=None,
-                sql=sql,
-                query_params=query_params,
-                server_info=server_info,
-                iflags=iflags,
-                error=original,
-            )
-
-            # Errors are easy to lose with buffering (rollback clears the buffer).
-            _publish_best_effort(st, msg)
-        except Exception:
-            return
 
 def _compute_server_flags(sa_conn: Any) -> Tuple[Optional[int], int]:
     try:

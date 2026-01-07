@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import inspect
+from dataclasses import replace
 from typing import Any, Callable, Dict, Optional
 
 from .config.settings import Settings
 from .connect import _build_default_kafka_publisher, connect
+from .kafka.batching import QueueingPublisher
 from .kafka.publisher import Publisher, StdoutPublisher
 from .sqlalchemy_interceptor import instrument_engine
 
@@ -16,12 +18,20 @@ def patch_pymysql(*, publisher: Optional[Publisher] = None, settings: Optional[S
         raise RuntimeError("pymysql is not installed") from e
 
     settings = settings or Settings.from_env()
+    owns_publisher = publisher is None
+    # Build publisher once per patch() call (not per connection).
+    # If we wrap it with QueueingPublisher here, disable the connect() wrapping
+    # to avoid double-wrapping.
+    if publisher is None:
+        publisher = _build_default_kafka_publisher(settings)
+    if settings.enable_queueing_publisher and not isinstance(publisher, QueueingPublisher):
+        publisher = QueueingPublisher(inner=publisher, settings=settings)
+        settings = replace(settings, enable_queueing_publisher=False)
     original = pymysql.connect
 
     # Ensure adapter uses unpatched driver connect (prevents recursion).
     from .adapters.pymysql import set_connect_func
     set_connect_func(original)
-
 
     def _bind_connect_args(original_connect: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Dict[str, Any]:
         sig = inspect.signature(original_connect)
@@ -49,6 +59,12 @@ def patch_pymysql(*, publisher: Optional[Publisher] = None, settings: Optional[S
         except Exception:
             pass
 
+        if owns_publisher:
+            try:
+                publisher.close()  # type: ignore[union-attr]
+            except Exception:
+                pass
+
     return unpatch
 
 
@@ -60,8 +76,12 @@ def patch_sqlalchemy(*, publisher: Optional[Publisher] = None, settings: Optiona
 
     settings = settings or Settings.from_env()
     owns_publisher = publisher is None
-    if publisher is None and settings.kafka_bootstrap_servers:
+    if publisher is None:
         publisher = _build_default_kafka_publisher(settings)
+    if settings.enable_queueing_publisher and not isinstance(publisher, QueueingPublisher):
+        publisher = QueueingPublisher(inner=publisher, settings=settings)
+        settings = replace(settings, enable_queueing_publisher=False)
+
     publisher = publisher or StdoutPublisher()
 
     original = sqlalchemy.create_engine
