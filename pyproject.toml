@@ -7,6 +7,10 @@ name = "mysql-interceptor"
 version = "0.1.0"
 description = "Intercept MySQL writes and mirror to Kafka with Java-compatible schema."
 readme = "README.md"
+license = { file = "LICENSE" }
+classifiers = [
+  "License :: OSI Approved :: MIT License",
+]
 requires-python = ">=3.9"
 authors = [{"name"= "Leszek Reimus"}]
 dependencies = ["confluent-kafka>=2.2"]

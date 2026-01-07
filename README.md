@@ -176,3 +176,6 @@ pip install mysql-interceptor[pymysql]
 pip install mysql-interceptor[sqlalchemy]
 ```
 
+## License
+
+MIT. See `LICENSE`.
