@@ -11,6 +11,7 @@ from .dbapi.classify import is_call, is_ddl, is_use, is_write
 from .events.models import SqlLogMessage
 from .kafka.publisher import Publisher
 from .utils import extract_server_info_best_effort, hostname
+from .pool_counter import GLOBAL_POOL_COUNTER
 
 IVER8 = 1
 PY_DRIVER = 2
@@ -206,10 +207,24 @@ def instrument_engine(*, engine: Any, publisher: Publisher, settings: Settings) 
 
     @event.listens_for(engine, "connect")
     def _on_connect(dbapi_conn: Any, connection_record: Any) -> None:
+        if not connection_record.info.get("_mi_pool_counted"):
+            try:
+                GLOBAL_POOL_COUNTER.inc()
+                connection_record.info["_mi_pool_counted"] = True
+            except Exception:
+                pass
         connection_record.info["mysql_interceptor_state"] = _build_state(
             dbapi_conn=dbapi_conn, engine_url=engine.url, publisher=publisher, settings=settings
         )
 
+
+    @event.listens_for(engine, "close")
+    def _on_close(dbapi_conn: Any, connection_record: Any) -> None:
+        if connection_record.info.pop("_mi_pool_counted", False):
+            try:
+                GLOBAL_POOL_COUNTER.dec()
+            except Exception:
+                pass
     @event.listens_for(engine, "commit")
     def _on_commit(sa_conn: Any) -> None:
         st: Optional[_SAState] = getattr(sa_conn, "info", {}).get("mysql_interceptor_state")  # type: ignore[attr-defined]
@@ -455,7 +470,7 @@ def _build_message(
         stmtDbName=st.stmt_db_name or st.db_name,
         debug=st.settings.inline_debug_value,
         connectionId=st.connection_id,
-        totalPoolCount=None,
+        totalPoolCount=_safe_int(GLOBAL_POOL_COUNTER.get()),
         executionCount=st.execution_count,
         serverFlags=st.cached_server_flags,
         clientFlags=st.client_flags,

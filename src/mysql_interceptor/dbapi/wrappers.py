@@ -11,6 +11,7 @@ from ..dbapi.txn_buffer import TransactionBuffer
 from ..events.models import SqlLogMessage
 from ..kafka.publisher import Publisher
 from ..utils import extract_server_info_best_effort, hostname
+from ..pool_counter import GLOBAL_POOL_COUNTER
 
 IVER8 = 1
 PY_DRIVER = 2
@@ -215,6 +216,10 @@ class ConnectionWrapper:
         database: Optional[str],
     ) -> None:
         self._conn = conn
+        try:
+            GLOBAL_POOL_COUNTER.inc()
+        except Exception:
+            pass
         self._publisher = publisher
         self._settings = settings
         self._driver_name = driver_name
@@ -261,6 +266,10 @@ class ConnectionWrapper:
                 self._publisher.flush()
             except Exception:
                 pass
+        try:
+            GLOBAL_POOL_COUNTER.dec()
+        except Exception:
+            pass
         return self._conn.close()
 
     def _maybe_apply_inline_debug(self, sql: str) -> str:
@@ -344,7 +353,7 @@ class ConnectionWrapper:
             stmtDbName=self._stmt_db_name or self._db_name,
             debug=self._settings.inline_debug_value,
             connectionId=self._connection_id,
-            totalPoolCount=None,
+            totalPoolCount=_safe_int(GLOBAL_POOL_COUNTER.get()),
             executionCount=self._execution_count,
             durationNs=duration_ns,
             serverFlags=self._cached_server_flags,
@@ -404,7 +413,7 @@ class ConnectionWrapper:
                 stmtDbName=self._stmt_db_name or self._db_name,
                 debug=self._settings.inline_debug_value,
                 connectionId=self._connection_id,
-                totalPoolCount=None,
+                totalPoolCount=_safe_int(GLOBAL_POOL_COUNTER.get()),
                 executionCount=self._execution_count,
                 durationNs=(duration_ns if is_last else None),
                 serverFlags=self._cached_server_flags,
