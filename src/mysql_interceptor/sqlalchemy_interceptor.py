@@ -90,6 +90,26 @@ class _SAState:
     buffer: List[SqlLogMessage] = dataclasses.field(default_factory=list)
 
 
+def _get_dbapi_conn_from_sa_connection(sa_conn: Any) -> Any:
+    """Return underlying DBAPI connection for a SQLAlchemy Connection (best effort).
+
+    SQLAlchemy 2.x deprecates ConnectionFairy.connection; prefer driver_connection.
+    """
+    try:
+        fairy = getattr(sa_conn, "connection", None)
+        if fairy is None:
+            return None
+        v = getattr(fairy, "driver_connection", None)
+        if v is not None:
+            return v
+        v = getattr(fairy, "connection", None)
+        if v is not None:
+            return v
+        return fairy
+    except Exception:
+        return None
+
+
 def _try_query_scalar(dbapi_conn: Any, sql: str) -> Any:
     cur = dbapi_conn.cursor()
     try:
@@ -223,11 +243,7 @@ def instrument_engine(*, engine: Any, publisher: Publisher, settings: Settings) 
         end_ms = time.time_ns() // 1_000_000
         timestamp_ms = end_ms - (duration_ns // 1_000_000)
 
-        dbapi_conn = None
-        try:
-            dbapi_conn = sa_conn.connection.connection  # type: ignore[attr-defined]
-        except Exception:
-            dbapi_conn = None
+        dbapi_conn = _get_dbapi_conn_from_sa_connection(sa_conn)
 
         server_info, had_err = extract_server_info_best_effort(cursor, dbapi_conn)
         iflags_extra = PY_ERROR_SERVER_INFO if had_err else 0
@@ -302,9 +318,70 @@ def instrument_engine(*, engine: Any, publisher: Publisher, settings: Settings) 
             _buffer_or_publish(st, msg)
 
 
+
+    @event.listens_for(engine, "handle_error")
+    def _on_handle_error(exception_context: Any) -> None:
+        """Capture DBAPI errors (after_cursor_execute does not run on exceptions)."""
+        try:
+            sa_conn = getattr(exception_context, "connection", None)
+            st: Optional[_SAState] = getattr(sa_conn, "info", {}).get("mysql_interceptor_state") if sa_conn else None  # type: ignore[attr-defined]
+            if not st:
+                return
+
+            statement = getattr(exception_context, "statement", None)
+            if statement is None:
+                return
+            sql = str(statement)
+
+            _track_stmt_db_name(st, sql)
+
+            if not _should_capture(st, sql, force_call=False):
+                st.execution_count += 1
+                return
+
+            exec_ctx = getattr(exception_context, "execution_context", None)
+            t0 = getattr(exec_ctx, "_mi_t0", None)
+            duration_ns: Optional[int] = (time.perf_counter_ns() - t0) if isinstance(t0, int) else None
+
+            end_ms = time.time_ns() // 1_000_000
+            timestamp_ms = end_ms - (duration_ns // 1_000_000) if duration_ns is not None else end_ms
+
+            cursor = getattr(exception_context, "cursor", None)
+            dbapi_conn = _get_dbapi_conn_from_sa_connection(sa_conn) if sa_conn is not None else None
+            server_info, had_err = extract_server_info_best_effort(cursor, dbapi_conn)
+            iflags_extra = PY_ERROR_SERVER_INFO if had_err else 0
+
+            server_flags, _ = _compute_server_flags(sa_conn)
+            st.cached_server_flags = server_flags
+            iflags = st.base_iflags | iflags_extra
+
+            query_params = _params_or_none(st, getattr(exception_context, "parameters", None))
+
+            original = getattr(exception_context, "original_exception", None)
+            if original is None:
+                original = getattr(exception_context, "original", None)
+
+            st.execution_count += 1
+            msg = _build_message(
+                st=st,
+                timestamp_ms=timestamp_ms,
+                duration_ns=duration_ns,
+                update_count=None,
+                sql=sql,
+                query_params=query_params,
+                server_info=server_info,
+                iflags=iflags,
+                error=original,
+            )
+
+            # Errors are easy to lose with buffering (rollback clears the buffer).
+            _publish_best_effort(st, msg)
+        except Exception:
+            return
+
 def _compute_server_flags(sa_conn: Any) -> Tuple[Optional[int], int]:
     try:
-        dbapi_conn = sa_conn.connection.connection  # type: ignore[attr-defined]
+        dbapi_conn = _get_dbapi_conn_from_sa_connection(sa_conn)
         v = getattr(dbapi_conn, "server_status", None) or getattr(dbapi_conn, "_server_status", None)
         return _safe_int(v), 0
     except Exception:
@@ -410,38 +487,63 @@ def _buffer_or_publish(st: _SAState, msg: SqlLogMessage) -> None:
 
 
 def handle_error(exception_context: Any) -> None:
-    """SQLAlchemy event hook for DBAPI errors; publishes a best-effort Kafka record."""
-    try:
-        statement = getattr(exception_context, "statement", None)
-        parameters = getattr(exception_context, "parameters", None)
-        original = getattr(exception_context, "original_exception", None)
-        dbapi_conn = getattr(exception_context, "connection", None)
+    """SQLAlchemy event hook for DBAPI errors.
 
-        # duration
-        duration_ns: int | None = None
+    Safe to register directly: pulls state from
+    exception_context.connection.info["mysql_interceptor_state"].
+    """
+    try:
+        sa_conn = getattr(exception_context, "connection", None)
+        st: Optional[_SAState] = getattr(sa_conn, "info", {}).get("mysql_interceptor_state") if sa_conn else None  # type: ignore[attr-defined]
+        if not st:
+            return
+
+        statement = getattr(exception_context, "statement", None)
+        if statement is None:
+            return
+        sql = str(statement)
+
+        _track_stmt_db_name(st, sql)
+
+        if not _should_capture(st, sql, force_call=False):
+            st.execution_count += 1
+            return
+
         exec_ctx = getattr(exception_context, "execution_context", None)
         t0 = getattr(exec_ctx, "_mi_t0", None)
-        if isinstance(t0, int):
-            duration_ns = time.perf_counter_ns() - t0
+        duration_ns: Optional[int] = (time.perf_counter_ns() - t0) if isinstance(t0, int) else None
 
-        # best effort: stmtDbName comes from 'SELECT DATABASE()' helper on wrapper if available
-        # We'll reuse existing builder but force errorMessage.
-        error_message = None
-        try:
-            error_message = str(original) if original is not None else "Unknown DBAPI error"
-        except Exception:
-            error_message = "Unknown DBAPI error"
+        end_ms = time.time_ns() // 1_000_000
+        timestamp_ms = end_ms - (duration_ns // 1_000_000) if duration_ns is not None else end_ms
 
-        # We can't rely on updatecount/serverInfo; keep best-effort.
-        msg = builder.build_message(
-            sql=str(statement) if statement is not None else None,
-            query_params=builder.normalize_params(parameters),
+        cursor = getattr(exception_context, "cursor", None)
+        dbapi_conn = _get_dbapi_conn_from_sa_connection(sa_conn) if sa_conn is not None else None
+        server_info, had_err = extract_server_info_best_effort(cursor, dbapi_conn)
+        iflags_extra = PY_ERROR_SERVER_INFO if had_err else 0
+
+        server_flags, _ = _compute_server_flags(sa_conn)
+        st.cached_server_flags = server_flags
+        iflags = st.base_iflags | iflags_extra
+
+        query_params = _params_or_none(st, getattr(exception_context, "parameters", None))
+
+        original = getattr(exception_context, "original_exception", None)
+        if original is None:
+            original = getattr(exception_context, "original", None)
+
+        st.execution_count += 1
+        msg = _build_message(
+            st=st,
+            timestamp_ms=timestamp_ms,
             duration_ns=duration_ns,
             update_count=None,
-            server_info=None,
-            error_message=error_message,
+            sql=sql,
+            query_params=query_params,
+            server_info=server_info,
+            iflags=iflags,
+            error=original,
         )
-        publisher.publish(msg)
+        _publish_best_effort(st, msg)
     except Exception:
-        # never raise from interceptor
         return
+

@@ -59,6 +59,7 @@ def patch_sqlalchemy(*, publisher: Optional[Publisher] = None, settings: Optiona
         raise RuntimeError("sqlalchemy is not installed") from e
 
     settings = settings or Settings.from_env()
+    owns_publisher = publisher is None
     if publisher is None and settings.kafka_bootstrap_servers:
         publisher = _build_default_kafka_publisher(settings)
     publisher = publisher or StdoutPublisher()
@@ -74,5 +75,10 @@ def patch_sqlalchemy(*, publisher: Optional[Publisher] = None, settings: Optiona
 
     def unpatch() -> None:
         sqlalchemy.create_engine = original  # type: ignore[attr-defined]
+        if owns_publisher:
+            try:
+                publisher.close()
+            except Exception:
+                pass
 
     return unpatch

@@ -20,9 +20,9 @@ help:
 	@echo "$(PROJECT) - dev helpers"
 	@echo ""
 	@echo "Docker (dependencies):"
-	@echo "  make up                         Start mysql + kafka via docker-compose"
-	@echo "  make down                       Stop and remove containers"
-	@echo "  make ps                         Show container status"
+	@echo "  make up                          Start mysql + kafka via docker-compose"
+	@echo "  make down                        Stop and remove containers"
+	@echo "  make ps                          Show container status"
 	@echo "  make logs                        Tail all logs"
 	@echo "  make logs-kafka                  Tail kafka logs"
 	@echo "  make logs-mysql                  Tail mysql logs"
@@ -30,6 +30,10 @@ help:
 	@echo "Integration tests (auto venv):"
 	@echo "  make pymysql-test                Create venv (if needed), install deps, run pytest (PyMySQL)"
 	@echo "  make alchemysql-test             Create venv (if needed), install deps, run pytest (SQLAlchemy)"
+	@echo ""
+	@echo "Kafka topic inspection"
+	@echo "  make inspect-results             Prints the contents of the docker kafka topic MYSQL_EVENTS"
+	@echo ""
 	@echo ""
 
 .PHONY: _check-compose
