@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Intercept MySQL writes and mirror to Kafka with Java-compatible schema."
 readme = "README.md"
 requires-python = ">=3.9"
-authors = [{"name"= "Your Team"}]
+authors = [{"name"= "Leszek Reimus"}]
 dependencies = ["confluent-kafka>=2.2"]
 
 [project.optional-dependencies]
