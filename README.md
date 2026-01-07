@@ -68,19 +68,21 @@ From repo root:
 - `make down`
 
 
+
 ### Inspect Kafka output
 
-After running tests, you can print interceptor JSON events from Kafka:
+Print interceptor events from Kafka (one JSON object per line):
 
 ```bash
 make inspect-results
 ```
 
-Optional filters (default topic is `MYSQL_EVENTS`):
+By default it reads topic `MYSQL_EVENTS` (the library default). Override if needed:
 
 ```bash
 make inspect-results TOPIC=MYSQL_EVENTS
-make inspect-results PATTERN='MYSQL_EVENTS_TEST_.*'
+make inspect-results PATTERN='MYSQL_EVENTS_.*'
+make inspect-results DEBUG=it-pymysql
 ```
 
 List topics:
@@ -91,7 +93,86 @@ python scripts/inspect_kafka.py --bootstrap localhost:9092 --list-topics
 ```
 
 
-Note: `make pymysql-test` / `make alchemysql-test` automatically install the library in editable mode into the integration venv.
+
+Integration tests publish to `MYSQL_EVENTS` and validate by filtering Kafka messages by the test start timestamp (to avoid interference from previous runs).
 
 
-Note: integration targets run pytest from the repo root so test helpers under `tests/` can be imported.
+Integration tests publish to `MYSQL_EVENTS` and validate by filtering Kafka messages using `stmtDbName == <test db>` (plus CREATE/USE/DROP DATABASE statements).
+
+
+Integration tests cover both `USE <db>` (dbName may be null) and connecting with `db=<db>` / URL `/<db>` (dbName should be populated).
+
+
+Repo includes a `.gitignore` to avoid committing `.venv`, `*.egg-info`, and `__pycache__`.
+
+
+Integration tests additionally cover views, stored procedures, and switching databases via `USE`.
+
+
+
+## Running locally
+
+### Install docker-compose (if missing)
+
+```bash
+./scripts/install-docker-compose.sh
+```
+
+### Start MySQL + Kafka
+
+```bash
+make up
+make ps
+```
+
+### Run integration tests
+
+PyMySQL:
+
+```bash
+make pymysql-test
+```
+
+SQLAlchemy + ORM:
+
+```bash
+make alchemysql-test
+```
+
+### Inspect Kafka output
+
+```bash
+make inspect-results
+```
+
+Optional:
+
+```bash
+make inspect-results TOPIC=MYSQL_EVENTS
+make inspect-results PATTERN='MYSQL_EVENTS_.*'
+make inspect-results DEBUG=it-pymysql
+```
+
+### Stop everything
+
+```bash
+make down
+```
+
+
+
+
+## Dependencies
+
+- Kafka client: **confluent-kafka** is a required dependency of this package (installed automatically with `pip install mysql-interceptor`).
+- MySQL drivers are optional:
+  - PyMySQL is only needed if you use `patch_pymysql()` or `mysql_interceptor.connect(..., driver="pymysql")`.
+  - SQLAlchemy is only needed if you use `patch_sqlalchemy()`.
+
+If you want optional installs:
+
+```bash
+pip install mysql-interceptor[pymysql]
+pip install mysql-interceptor[sqlalchemy]
+```
+

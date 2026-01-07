@@ -1,37 +1,58 @@
-import json, socket, time
-from kafka import KafkaConsumer
+import json
+import socket
+import time
+from typing import Any, Dict, List, Optional
 
-def wait_for_port(host: str, port: int, timeout_s: float = 60.0) -> None:
-    end = time.time() + timeout_s
-    last = None
-    while time.time() < end:
+from confluent_kafka import Consumer
+
+
+def wait_for_port(host: str, port: int, timeout_s: float = 30.0) -> None:
+    deadline = time.time() + timeout_s
+    last: Optional[Exception] = None
+    while time.time() < deadline:
         try:
-            with socket.create_connection((host, port), timeout=2):
+            with socket.create_connection((host, port), timeout=1.0):
                 return
-        except OSError as e:
+        except Exception as e:
             last = e
             time.sleep(0.5)
-    raise RuntimeError(f"port not ready: {host}:{port} ({last})")
+    raise TimeoutError(f"Port {host}:{port} not reachable within {timeout_s}s. Last error: {last!r}")
 
-def consume_json_messages(topic: str, bootstrap: str = "localhost:9092", timeout_s: float = 20.0, max_messages: int = 10000):
-    consumer = KafkaConsumer(
-        topic,
-        bootstrap_servers=bootstrap,
-        auto_offset_reset="earliest",
-        enable_auto_commit=False,
-        group_id=f"mysql-interceptor-tests-{time.time_ns()}",
-        value_deserializer=lambda v: json.loads(v.decode("utf-8")),
-    )
-    out=[]
-    end=time.time()+timeout_s
+
+def consume_json_messages(
+    *,
+    bootstrap: str = "localhost:9092",
+    topic: str,
+    timeout_s: float = 10.0,
+    max_messages: int = 10000,
+    group_id: str = "mi-it-consumer",
+) -> List[Dict[str, Any]]:
+    cfg = {
+        "bootstrap.servers": bootstrap,
+        "group.id": f"{group_id}-{int(time.time() * 1000)}",
+        "auto.offset.reset": "earliest",
+        "enable.auto.commit": False,
+    }
+    c = Consumer(cfg)
+    out: List[Dict[str, Any]] = []
     try:
-        while time.time()<end and len(out)<max_messages:
-            records=consumer.poll(timeout_ms=250)
-            for _, msgs in records.items():
-                for m in msgs:
-                    out.append(m.value)
-            if out:
-                time.sleep(0.25)
+        c.subscribe([topic])
+        deadline = time.time() + timeout_s
+        while time.time() < deadline and len(out) < max_messages:
+            msg = c.poll(0.5)
+            if msg is None:
+                continue
+            if msg.error():
+                # ignore transient errors
+                continue
+            try:
+                out.append(json.loads(msg.value().decode("utf-8")))
+            except Exception:
+                # best effort: skip malformed
+                continue
     finally:
-        consumer.close()
+        try:
+            c.close()
+        except Exception:
+            pass
     return out

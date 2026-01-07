@@ -13,6 +13,7 @@ from ..kafka.publisher import Publisher
 from ..utils import extract_server_info_best_effort, hostname
 
 IVER8 = 1
+PY_DRIVER = 2
 
 # Python-only iFlag bits (avoid collision with Java bits)
 PY_ERROR_CONNECTION_ID = 1 << 21
@@ -273,7 +274,7 @@ class ConnectionWrapper:
         )
 
     def _base_iflags(self) -> int:
-        iflags = IVER8
+        iflags = IVER8 | PY_DRIVER
         iflags |= self._server_host_iflags
         iflags |= self._server_version_iflags
         iflags |= self._default_tz_iflags

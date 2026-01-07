@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+*.so
+*.dylib
+*.egg-info/
+.eggs/
+build/
+dist/
+.coverage
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtualenvs
+.venv/
+tests/integration/**/.venv/
+
+# IDE
+.vscode/
+.idea/
+.DS_Store

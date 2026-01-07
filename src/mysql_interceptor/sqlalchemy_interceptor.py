@@ -13,6 +13,7 @@ from .kafka.publisher import Publisher
 from .utils import extract_server_info_best_effort, hostname
 
 IVER8 = 1
+PY_DRIVER = 2
 
 PY_ERROR_CONNECTION_ID = 1 << 21
 PY_ERROR_PREPROCESS_BATCHED_ARGS = 1 << 22
@@ -84,7 +85,7 @@ class _SAState:
     client_flags: Optional[int]
     cached_server_flags: Optional[int] = None
 
-    base_iflags: int = IVER8
+    base_iflags: int = IVER8 | PY_DRIVER
     execution_count: int = 0
     buffer: List[SqlLogMessage] = dataclasses.field(default_factory=list)
 
@@ -105,7 +106,7 @@ def _try_query_scalar(dbapi_conn: Any, sql: str) -> Any:
 
 
 def _build_state(*, dbapi_conn: Any, engine_url: Any, publisher: Publisher, settings: Settings) -> _SAState:
-    iflags = IVER8
+    iflags = IVER8 | PY_DRIVER
 
     db_name = _safe_str(getattr(engine_url, "database", None))
     stmt_db_name = db_name
@@ -406,3 +407,41 @@ def _buffer_or_publish(st: _SAState, msg: SqlLogMessage) -> None:
         st.buffer.append(msg)
         return
     _publish_best_effort(st, msg)
+
+
+def handle_error(exception_context: Any) -> None:
+    """SQLAlchemy event hook for DBAPI errors; publishes a best-effort Kafka record."""
+    try:
+        statement = getattr(exception_context, "statement", None)
+        parameters = getattr(exception_context, "parameters", None)
+        original = getattr(exception_context, "original_exception", None)
+        dbapi_conn = getattr(exception_context, "connection", None)
+
+        # duration
+        duration_ns: int | None = None
+        exec_ctx = getattr(exception_context, "execution_context", None)
+        t0 = getattr(exec_ctx, "_mi_t0", None)
+        if isinstance(t0, int):
+            duration_ns = time.perf_counter_ns() - t0
+
+        # best effort: stmtDbName comes from 'SELECT DATABASE()' helper on wrapper if available
+        # We'll reuse existing builder but force errorMessage.
+        error_message = None
+        try:
+            error_message = str(original) if original is not None else "Unknown DBAPI error"
+        except Exception:
+            error_message = "Unknown DBAPI error"
+
+        # We can't rely on updatecount/serverInfo; keep best-effort.
+        msg = builder.build_message(
+            sql=str(statement) if statement is not None else None,
+            query_params=builder.normalize_params(parameters),
+            duration_ns=duration_ns,
+            update_count=None,
+            server_info=None,
+            error_message=error_message,
+        )
+        publisher.publish(msg)
+    except Exception:
+        # never raise from interceptor
+        return

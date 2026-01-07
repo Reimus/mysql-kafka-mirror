@@ -94,7 +94,7 @@ alchemysql-test:
 .PHONY: inspect-results
 inspect-results:
 	@echo "Reading interceptor events from Kafka (CTRL+C to stop)."
-	@echo "Optional: TOPIC=... or PATTERN=... (default TOPIC=MYSQL_EVENTS)"
+	@echo "Optional: TOPIC=... PATTERN=... DEBUG=... (default TOPIC=MYSQL_EVENTS)"
 	@echo "Example: make inspect-results PATTERN='MYSQL_EVENTS_TEST_.*'"
 	@if [ -d "$(PYMYSQL_VENV)" ]; then \
 		source "$(PYMYSQL_VENV)/bin/activate"; \
@@ -102,5 +102,5 @@ inspect-results:
 		echo "PyMySQL venv missing. Run: make pymysql-test (creates venv + installs deps)."; \
 		exit 1; \
 	fi; \
-	python scripts/inspect_kafka.py --bootstrap localhost:9092 $${TOPIC:+--topic $$TOPIC} $${PATTERN:+--pattern $$PATTERN}
+	python scripts/inspect_kafka.py --bootstrap localhost:9092 $${TOPIC:+--topic $$TOPIC} $${PATTERN:+--pattern $$PATTERN} $${DEBUG:+--debug $$DEBUG}
 
