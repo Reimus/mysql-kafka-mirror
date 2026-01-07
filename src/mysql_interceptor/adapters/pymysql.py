@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any, Callable, Optional
 
+from .base import DriverAdapter
+
 _CONNECT_FUNC: Optional[Callable[..., Any]] = None
 
 
@@ -11,7 +13,15 @@ def set_connect_func(func: Optional[Callable[..., Any]]) -> None:
     _CONNECT_FUNC = func
 
 
-class PyMySQLAdapter:
+class PyMySQLAdapter(DriverAdapter):
+    """Driver adapter for PyMySQL.
+
+    This adapter supports dependency injection of the underlying (unpatched)
+    connect callable to prevent recursion when monkeypatching.
+    """
+
+    name = "pymysql"
+
     def connect(self, *args: Any, **kwargs: Any) -> Any:
         import pymysql  # type: ignore
 

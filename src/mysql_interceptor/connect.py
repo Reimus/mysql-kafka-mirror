@@ -4,16 +4,15 @@ from typing import Any, Optional
 
 from .config.settings import Settings
 from .dbapi.wrappers import ConnectionWrapper
-from .errors import DriverAdapterError
+from .adapters.registry import get_adapter_with_defaults
 from .kafka.batching import QueueingPublisher
 from .kafka.publisher import Publisher, StdoutPublisher
 
 
 def _get_adapter(driver: str):
-    if driver == "pymysql":
-        from .adapters.pymysql import PyMySQLAdapter
-        return PyMySQLAdapter()
-    raise DriverAdapterError(f"Unsupported driver: {driver!r}")
+    # Keep factory logic out of this module so adding new drivers does not
+    # require changing the public connect() path.
+    return get_adapter_with_defaults(driver)
 
 
 def _build_default_kafka_publisher(settings: Settings) -> Publisher:
