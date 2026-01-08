@@ -89,7 +89,7 @@ class Settings:
     # Capture policy
     buffer_until_commit: bool = True
     capture_all: bool = True  # if false, logs USE and writes (+ optional ddl/callproc)
-    capture_ddl: bool = False
+    capture_ddl: bool = True
     capture_callproc: bool = True
 
     # Payload toggles

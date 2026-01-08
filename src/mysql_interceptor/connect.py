@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Any, Optional
 
 from .config.settings import Settings
@@ -7,6 +8,8 @@ from .dbapi.wrappers import ConnectionWrapper
 from .adapters.registry import get_adapter_with_defaults
 from .kafka.batching import QueueingPublisher
 from .kafka.publisher import Publisher, StdoutPublisher
+
+logger = logging.getLogger(__name__)
 
 
 def _get_adapter(driver: str):
@@ -32,6 +35,7 @@ def _build_default_kafka_publisher(settings: Settings) -> Publisher:
             adaptive_partitioning_enabled=settings.kafka_adaptive_partitioning_enabled,
         )
     except Exception:
+        logger.debug("Failed to initialize ConfluentKafkaPublisher", exc_info=True)
         pass
 
     try:
@@ -46,8 +50,10 @@ def _build_default_kafka_publisher(settings: Settings) -> Publisher:
             buffer_memory=settings.kafka_buffer_memory,
         )
     except Exception:
+        logger.debug("Failed to initialize KafkaPythonPublisher", exc_info=True)
         pass
 
+    logger.warning("No Kafka publisher available, falling back to StdoutPublisher")
     return StdoutPublisher()
 
 

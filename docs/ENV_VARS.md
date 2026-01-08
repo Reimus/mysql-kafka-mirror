@@ -12,7 +12,7 @@
 | `INTERCEPTOR_KAFKA_ADAPTIVE_PARTITIONING_ENABLED` | `kafka_adaptive_partitioning_enabled` | `bool` | `True` |
 | `INTERCEPTOR_BUFFER_UNTIL_COMMIT` | `buffer_until_commit` | `bool` | `True` |
 | `INTERCEPTOR_CAPTURE_ALL` | `capture_all` | `bool` | `True` |
-| `INTERCEPTOR_CAPTURE_DDL` | `capture_ddl` | `bool` | `False` |
+| `INTERCEPTOR_CAPTURE_DDL` | `capture_ddl` | `bool` | `True` |
 | `INTERCEPTOR_CAPTURE_CALLPROC` | `capture_callproc` | `bool` | `True` |
 | `INTERCEPTOR_INCLUDE_SQL` | `include_sql` | `bool` | `True` |
 | `INTERCEPTOR_INCLUDE_PARAMS` | `include_params` | `bool` | `True` |

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import queue
 import threading
 import time
@@ -8,6 +9,8 @@ from typing import List
 from ..config.settings import Settings
 from ..events.models import SqlLogMessage
 from .publisher import Publisher
+
+logger = logging.getLogger(__name__)
 
 
 class QueueingPublisher:
@@ -53,12 +56,18 @@ class QueueingPublisher:
                 evt = self._q.get(timeout=timeout)
                 batch.append(evt)
                 if len(batch) >= self._settings.publish_batch_size:
-                    self._inner.publish_batch(batch)
+                    try:
+                        self._inner.publish_batch(batch)
+                    except Exception:
+                        logger.exception("Error in background publisher thread")
                     batch.clear()
                     last_flush = time.time()
             except queue.Empty:
                 if batch:
-                    self._inner.publish_batch(batch)
+                    try:
+                        self._inner.publish_batch(batch)
+                    except Exception:
+                        logger.exception("Error in background publisher thread during flush")
                     batch.clear()
                 last_flush = time.time()
 

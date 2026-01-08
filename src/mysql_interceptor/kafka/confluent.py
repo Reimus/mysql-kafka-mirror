@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import logging
 from typing import Callable, List, Optional
 
 from ..errors import PublisherError
 from ..events.models import SqlLogMessage
+
+logger = logging.getLogger(__name__)
 
 
 def _json_serializer(event: SqlLogMessage) -> bytes:
@@ -45,8 +48,20 @@ class ConfluentKafkaPublisher:
         self._producer = Producer(conf)
 
     def publish(self, event: SqlLogMessage) -> None:
-        self._producer.produce(self._topic, key=str(event.connectionId or ""), value=_json_serializer(event))
-        self._producer.poll(0)
+        try:
+            self._producer.produce(
+                self._topic,
+                key=str(event.connectionId or ""),
+                value=_json_serializer(event),
+                on_delivery=self._on_delivery,
+            )
+            self._producer.poll(0)
+        except Exception:
+            logger.exception("Failed to produce message to Kafka")
+
+    def _on_delivery(self, err, msg):
+        if err is not None:
+            logger.error("Failed to deliver message to Kafka: %s", err)
 
     def publish_batch(self, events: List[SqlLogMessage]) -> None:
         for e in events:

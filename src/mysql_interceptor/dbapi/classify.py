@@ -37,3 +37,18 @@ def is_call(sql: str) -> bool:
 
 def is_use(sql: str) -> bool:
     return statement_kind(sql) == "use"
+
+
+def parse_use_db(sql: str) -> Optional[str]:
+    try:
+        s = (sql or "").strip()
+        if s.startswith("/*"):
+            idx = s.find("*/")
+            if idx != -1:
+                s = s[idx + 2 :].lstrip()
+        m = re.match(r"(?is)^use\s+(`([^`]+)`|([a-zA-Z0-9_]+))\s*;?\s*$", s)
+        if not m:
+            return None
+        return m.group(2) or m.group(3)
+    except Exception:
+        return None

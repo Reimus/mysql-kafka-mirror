@@ -6,28 +6,34 @@ from typing import Any, List, Optional, Protocol, TypeVar, runtime_checkable
 
 from ..config.redaction import params_to_query_params
 from ..config.settings import Settings
-from ..dbapi.classify import is_call, is_ddl, is_use, is_write
+from ..dbapi.classify import is_call, is_ddl, is_use, is_write, parse_use_db
 from ..dbapi.txn_buffer import TransactionBuffer
 from ..events.models import SqlLogMessage
 from ..kafka.publisher import Publisher
-from ..utils import extract_server_info_best_effort, hostname
+from ..utils import (
+    _default_tz,
+    _isolation_to_level,
+    _safe_int,
+    _safe_str,
+    extract_server_info_best_effort,
+    hostname,
+)
 from ..pool_counter import GLOBAL_POOL_COUNTER
-
-IVER8 = 1
-PY_DRIVER = 2
-
-# Python-only iFlag bits (avoid collision with Java bits)
-PY_ERROR_CONNECTION_ID = 1 << 21
-PY_ERROR_PREPROCESS_BATCHED_ARGS = 1 << 22
-PY_ERROR_POSTPROCESS_BATCHED_ARGS = 1 << 23
-PY_ERROR_DEFAULT_TZ = 1 << 24
-PY_ERROR_SERVER_TZ = 1 << 25
-PY_ERROR_ISOLATION = 1 << 26
-PY_ERROR_CLIENT_FLAGS = 1 << 27
-PY_ERROR_SERVER_FLAGS = 1 << 28
-PY_ERROR_SERVER_VERSION = 1 << 29
-PY_ERROR_SERVER_HOST = 1 << 30
-PY_ERROR_SERVER_INFO = 1 << 31
+from .constants import (
+    IVER8,
+    PY_DRIVER,
+    PY_ERROR_CLIENT_FLAGS,
+    PY_ERROR_CONNECTION_ID,
+    PY_ERROR_DEFAULT_TZ,
+    PY_ERROR_ISOLATION,
+    PY_ERROR_POSTPROCESS_BATCHED_ARGS,
+    PY_ERROR_PREPROCESS_BATCHED_ARGS,
+    PY_ERROR_SERVER_FLAGS,
+    PY_ERROR_SERVER_HOST,
+    PY_ERROR_SERVER_INFO,
+    PY_ERROR_SERVER_TZ,
+    PY_ERROR_SERVER_VERSION,
+)
 
 
 @runtime_checkable
@@ -49,41 +55,6 @@ class DBAPIConnection(Protocol):
 
 
 TConn = TypeVar("TConn", bound=DBAPIConnection)
-
-
-def _safe_str(v: Any) -> Optional[str]:
-    try:
-        return None if v is None else str(v)
-    except Exception:
-        return None
-
-
-def _safe_int(v: Any) -> Optional[int]:
-    try:
-        return None if v is None else int(v)
-    except Exception:
-        return None
-
-
-def _default_tz() -> tuple[Optional[str], int]:
-    try:
-        import datetime
-        return _safe_str(datetime.datetime.now().astimezone().tzinfo), 0
-    except Exception:
-        return None, PY_ERROR_DEFAULT_TZ
-
-
-def _isolation_to_level(value: Optional[str]) -> Optional[int]:
-    if not value:
-        return None
-    v = value.strip().upper().replace("-", " ").replace("_", " ")
-    mapping = {
-        "READ UNCOMMITTED": 1,
-        "READ COMMITTED": 2,
-        "REPEATABLE READ": 4,
-        "SERIALIZABLE": 8,
-    }
-    return mapping.get(v)
 
 
 class _RecordingParamsIterable:
@@ -312,7 +283,7 @@ class ConnectionWrapper:
     def _track_stmt_db_name(self, sql: str) -> None:
         if not is_use(sql):
             return
-        db = _parse_use_db(sql)
+        db = parse_use_db(sql)
         if db:
             self._stmt_db_name = db
 
@@ -551,18 +522,3 @@ class ConnectionWrapper:
             return _safe_int(v), 0
         except Exception:
             return None, PY_ERROR_SERVER_FLAGS
-
-
-def _parse_use_db(sql: str) -> Optional[str]:
-    try:
-        s = (sql or "").strip()
-        if s.startswith("/*"):
-            idx = s.find("*/")
-            if idx != -1:
-                s = s[idx + 2 :].lstrip()
-        m = re.match(r"(?is)^use\s+(`([^`]+)`|([a-zA-Z0-9_]+))\s*;?\s*$", s)
-        if not m:
-            return None
-        return m.group(2) or m.group(3)
-    except Exception:
-        return None
