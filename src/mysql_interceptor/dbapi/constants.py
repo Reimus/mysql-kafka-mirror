@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 IVER8 = 1
-PY_DRIVER = 2
+PY_DRIVER_PYMYSQL = 2
+PY_DRIVER_SQLALCHEMY = 4
 
 # Python-only iFlag bits (avoid collision with Java bits)
 PY_ERROR_CONNECTION_ID = 1 << 21

@@ -10,7 +10,7 @@ from .config.settings import Settings
 from .dbapi.classify import is_call, is_ddl, is_use, is_write, parse_use_db
 from .dbapi.constants import (
     IVER8,
-    PY_DRIVER,
+    PY_DRIVER_SQLALCHEMY,
     PY_ERROR_CLIENT_FLAGS,
     PY_ERROR_CONNECTION_ID,
     PY_ERROR_DEFAULT_TZ,
@@ -58,7 +58,7 @@ class _SAState:
     client_flags: Optional[int]
     cached_server_flags: Optional[int] = None
 
-    base_iflags: int = IVER8 | PY_DRIVER
+    base_iflags: int = IVER8 | PY_DRIVER_SQLALCHEMY
     execution_count: int = 0
     buffer: List[SqlLogMessage] = dataclasses.field(default_factory=list)
 
@@ -99,7 +99,7 @@ def _try_query_scalar(dbapi_conn: Any, sql: str) -> Any:
 
 
 def _build_state(*, dbapi_conn: Any, engine_url: Any, publisher: Publisher, settings: Settings) -> _SAState:
-    iflags = IVER8 | PY_DRIVER
+    iflags = IVER8 | PY_DRIVER_SQLALCHEMY
 
     db_name = _safe_str(getattr(engine_url, "database", None))
     stmt_db_name = db_name

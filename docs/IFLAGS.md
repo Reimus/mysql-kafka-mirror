@@ -7,7 +7,8 @@
 | Name | Value | Meaning |
 |---|---:|---|
 | `IVER8` | `1` | Version marker (always set). |
-| `PY_DRIVER` | `2` | Python driver marker (distinguish from Java v8). |
+| `PY_DRIVER_PYMYSQL` | `2` | PyMySQL driver marker (distinguish from Java v8). |
+| `PY_DRIVER_SQLALCHEMY` | `4` | SQLAlchemy driver marker (distinguish from Java v8). |
 | `PY_ERROR_CONNECTION_ID` | `2097152` | Error fetching `connectionId`. |
 | `PY_ERROR_PREPROCESS_BATCHED_ARGS` | `4194304` | Error recording params for `executemany` pre-exec. |
 | `PY_ERROR_POSTPROCESS_BATCHED_ARGS` | `8388608` | Error serializing params into `queryParams`. |

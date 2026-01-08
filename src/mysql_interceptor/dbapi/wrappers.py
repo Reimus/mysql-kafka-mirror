@@ -21,7 +21,7 @@ from ..utils import (
 from ..pool_counter import GLOBAL_POOL_COUNTER
 from .constants import (
     IVER8,
-    PY_DRIVER,
+    PY_DRIVER_PYMYSQL,
     PY_ERROR_CLIENT_FLAGS,
     PY_ERROR_CONNECTION_ID,
     PY_ERROR_DEFAULT_TZ,
@@ -254,7 +254,7 @@ class ConnectionWrapper:
         )
 
     def _base_iflags(self) -> int:
-        iflags = IVER8 | PY_DRIVER
+        iflags = IVER8 | PY_DRIVER_PYMYSQL
         iflags |= self._server_host_iflags
         iflags |= self._server_version_iflags
         iflags |= self._default_tz_iflags
