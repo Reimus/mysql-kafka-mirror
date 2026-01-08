@@ -2,11 +2,12 @@
 
 Drop-in interception for MySQL writes that mirrors events to Kafka using a Java-compatible JSON schema.
 
-## Enable Kafka via env vars (Java-compatible)
+## Configuration via env vars (Java-compatible)
 
-Kafka export is enabled when `INTERCEPTOR_KAFKA_BOOTSTRAP_SERVERS` is set and you don't pass `publisher=...`.
+Kafka export is enabled when `INTERCEPTOR_KAFKA_BOOTSTRAP_SERVERS` is set.
 
 ```bash
+# Kafka
 export INTERCEPTOR_KAFKA_BOOTSTRAP_SERVERS="server1:9092,server2:9092"
 export INTERCEPTOR_KAFKA_TOPIC="MYSQL_EVENTS"
 export INTERCEPTOR_KAFKA_ACKS="all"
@@ -15,7 +16,17 @@ export INTERCEPTOR_KAFKA_LINGER_MS="1000"
 export INTERCEPTOR_KAFKA_BATCH_SIZE="16384"
 export INTERCEPTOR_KAFKA_BUFFER_MEMORY="33554432"
 export INTERCEPTOR_KAFKA_ADAPTIVE_PARTITIONING_ENABLED="true"
+
+# Capture Policy
+export INTERCEPTOR_CAPTURE_DDL="true"    # Default: true
+export INTERCEPTOR_CAPTURE_ALL="true"    # Default: true (captures all queries, if false only writes/DDL)
+
+# Async Publishing (Optional)
+export INTERCEPTOR_ENABLE_QUEUEING_PUBLISHER="true"
+export SERVICE_NAME="my-awesome-service"
 ```
+
+See `docs/ENV_VARS.md` for a full list of supported environment variables.
 
 ## Output schema
 
@@ -64,7 +75,7 @@ From repo root:
 
 - `make up` (starts MySQL+Kafka)
 - `make pymysql-test / make alchemysql-test` (unit tests)
-- `make pymysql-test / make alchemysql-test-integration` (runs both suites; install deps per `tests/integration/*/requirements.txt`)
+- `make pymysql-test-integration / make alchemysql-test-integration` (runs integration suites; install deps per `tests/integration/*/requirements.txt`)
 - `make down`
 
 
@@ -164,7 +175,7 @@ make down
 
 ## Dependencies
 
-- Kafka client: **confluent-kafka** is a required dependency of this package (installed automatically with `pip install mysql-interceptor`).
+- Kafka client: **confluent-kafka** is a recommended dependency (installed automatically with `pip install mysql-interceptor`). It falls back to `kafka-python` if `confluent-kafka` is missing.
 - MySQL drivers are optional:
   - PyMySQL is only needed if you use `patch_pymysql()` or `mysql_interceptor.connect(..., driver="pymysql")`.
   - SQLAlchemy is only needed if you use `patch_sqlalchemy()`.
